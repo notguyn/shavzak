@@ -1,0 +1,285 @@
+// Shavzak — battalion reserve scheduling. PostgreSQL via Prisma 7 driver adapter.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Role {
+  ADMIN
+  BATTALION_CMD
+  PLATOON_CMD
+  VIEWER
+}
+
+enum Rank {
+  PRIVATE
+  CORPORAL
+  SERGEANT
+  STAFF_SERGEANT
+  SERGEANT_FIRST_CLASS
+  MASTER_SERGEANT
+  STAFF_SERGEANT_MAJOR
+  SENIOR_SERGEANT_MAJOR
+  RAV_NAGAD
+  SECOND_LIEUTENANT
+  LIEUTENANT
+  CAPTAIN
+  MAJOR
+  LIEUTENANT_COLONEL
+  COLONEL
+}
+
+enum AssignmentType {
+  MISSION
+  GUARD
+  SHIFT
+  TRANSPORT
+  STANDBY
+  ATTENDANCE
+  TASK
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum BoardStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum BoardScope {
+  BATTALION
+  PLATOON
+}
+
+enum SlotStatus {
+  EMPTY
+  FILLED
+  LOCKED
+  CONFLICT
+}
+
+enum ConstraintKind {
+  HARD
+  SOFT
+}
+
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
+
+model Platoon {
+  id          String        @id @default(cuid())
+  name        String
+  commander   Soldier?      @relation("PlatoonCommander", fields: [commanderId], references: [id])
+  commanderId String?       @unique
+  soldiers    Soldier[]     @relation("PlatoonMembers")
+  boards      ShavzakBoard[]
+  users       User[]
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+}
+
+model Soldier {
+  id                   String   @id @default(cuid())
+  fullName             String
+  personalNumber       String   @unique
+  rank                 Rank     @default(PRIVATE)
+  platoon              Platoon? @relation("PlatoonMembers", fields: [platoonId], references: [id])
+  platoonId            String?
+  commandsPlatoon      Platoon? @relation("PlatoonCommander")
+  role                 String
+  phone                String?
+  homeCity             String?
+  travelDistanceKm     Int      @default(0)
+  certifications       Certification[] @relation("SoldierCertifications")
+  hasDrivingLicense    Boolean  @default(false)
+  medicalLimitations   String[]
+  availability         Json?    // array of { start, end } windows
+  preferredShifts      String[]
+  blockedShifts        String[]
+  maxConsecutiveDuties Int      @default(3)
+  lastAssignmentDate   DateTime?
+  reserveHistory       Json?
+  notes                String?
+  tags                 String[]
+  slots                AssignmentSlot[]
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([platoonId])
+}
+
+model Certification {
+  id          String   @id @default(cuid())
+  name        String
+  code        String   @unique
+  soldiers    Soldier[]    @relation("SoldierCertifications")
+  assignments Assignment[] @relation("AssignmentCertifications")
+}
+
+model ShavzakBoard {
+  id          String         @id @default(cuid())
+  name        String
+  scope       BoardScope     @default(BATTALION)
+  platoon     Platoon?       @relation(fields: [platoonId], references: [id])
+  platoonId   String?
+  startDate   DateTime
+  endDate     DateTime
+  status      BoardStatus    @default(DRAFT)
+  assignments Assignment[]
+  slots       AssignmentSlot[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+}
+
+model Assignment {
+  id                     String          @id @default(cuid())
+  title                  String
+  type                   AssignmentType  @default(MISSION)
+  description            String?
+  location               String?
+  startAt                DateTime
+  endAt                  DateTime
+  requiredManpower       Int             @default(1)
+  requiredRole           String?
+  requiredCertifications Certification[] @relation("AssignmentCertifications")
+  priority               Priority        @default(MEDIUM)
+  requiresWeapon         Boolean         @default(false)
+  requiresVehicle        Boolean         @default(false)
+  // Pattern for a constant/recurring assignment (shift tiling). Null = one-time.
+  recurring              Json?
+  // Shared id linking all per-day shift instances of one constant assignment.
+  recurringGroupId       String?
+  difficultyScore        Int             @default(1)
+  board                  ShavzakBoard?   @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  boardId                String?
+  slots                  AssignmentSlot[]
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+
+  @@index([boardId])
+  @@index([startAt])
+  @@index([recurringGroupId])
+}
+
+model AssignmentSlot {
+  id           String       @id @default(cuid())
+  assignment   Assignment   @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  assignmentId String
+  board        ShavzakBoard @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  boardId      String
+  soldier      Soldier?     @relation(fields: [soldierId], references: [id])
+  soldierId    String?
+  status       SlotStatus   @default(EMPTY)
+  isManual     Boolean      @default(false)
+  isLocked     Boolean      @default(false)
+  score        Float?
+  createdBy    String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@index([assignmentId])
+  @@index([boardId])
+  @@index([soldierId])
+}
+
+model ConstraintRule {
+  id        String         @id @default(cuid())
+  key       String         @unique
+  kind      ConstraintKind
+  enabled   Boolean        @default(true)
+  weight    Float          @default(1)
+  params    Json?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actor      User?    @relation(fields: [actorId], references: [id])
+  actorId    String?
+  action     String
+  entityType String
+  entityId   String?
+  before     Json?
+  after      Json?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+model User {
+  id            String     @id @default(cuid())
+  name          String
+  email         String     @unique
+  emailVerified Boolean    @default(false)
+  image         String?
+  role          Role       @default(VIEWER)
+  platoon       Platoon?   @relation(fields: [platoonId], references: [id])
+  platoonId     String?
+  auditLogs     AuditLog[]
+  sessions      Session[]
+  accounts      Account[]
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Better Auth (email/password)
+// ---------------------------------------------------------------------------
+
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  issuer                String?
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+model Verification {
+  id         String    @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime? @default(now())
+  updatedAt  DateTime? @updatedAt
+}

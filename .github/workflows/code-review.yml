@@ -1,0 +1,44 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    # For @claude mentions: only run if comment contains @claude
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request != null && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude'))
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@beta
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          direct_prompt: |
+            Review this pull request diff for correctness bugs, security issues, and
+            adherence to project conventions (Next.js 15, Prisma 7, shadcn base-nova,
+            next-intl, server actions with { ok, error } return shape).
+
+            Focus on:
+            - Correctness bugs (logic errors, edge cases, null/undefined)
+            - Security (authorization checks, input validation at boundaries)
+            - Performance (N+1 queries, unfiltered fetches, stale closures)
+            - Broken contracts (server action shape, RBAC, schema mismatches)
+
+            Skip style nits. Post findings as inline PR comments on the relevant lines.
+            If no real issues, post a single top-level comment saying the PR looks good.
